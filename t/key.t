@@ -250,6 +250,7 @@ wait more than 1sec: true
 --- ONLY
 
 
+
 === TEST 8: set(key, val), val is a Lua table
 --- http_config eval: $::HttpConfig
 --- config

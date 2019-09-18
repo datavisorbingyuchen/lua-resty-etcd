@@ -3,9 +3,6 @@ local typeof        = require("typeof")
 local cjson         = require("cjson.safe")
 local setmetatable  = setmetatable
 local clear_tab     = require "table.clear"
-local ipairs        = ipairs
-local type          = type
-local base64        = require("ngx.base64")
 local utils         = require("resty.etcd.utils")
 local tab_nkeys     = require "table.nkeys"
 
@@ -84,7 +81,7 @@ local function set(self, key, val, attr)
     attr = attr and attr or {}
 
     local lease
-    if attr.lease then      
+    if attr.lease then
         lease = attr.lease and attr.lease or 0
     end
 
@@ -92,7 +89,7 @@ local function set(self, key, val, attr)
     if attr.prev_kv then
         prev_kv = attr.prev_kv and 'true' or 'false'
     end
-    
+
     local ignore_value
     if attr.ignore_value then
         ignore_value = attr.ignore_value and 'true' or 'false'
@@ -179,7 +176,7 @@ local function get(self, key, attr)
     local count_only
     if attr.count_only then
         count_only = attr.count_only and 'true' or 'false'
-    end    
+    end
 
     local min_mod_revision
     if attr.min_mod_revision then
@@ -228,11 +225,11 @@ local function get(self, key, attr)
 
     if res.status==200 then
         if res.body.kvs and tab_nkeys(res.body.kvs)>0 then
-            for i = 1, #res.body.kvs do  
+            for i = 1, #res.body.kvs do
                 res.body.kvs[i].value = self.decode_base64(res.body.kvs[i].value)
                 res.body.kvs[i].value = self.decode_json(res.body.kvs[i].value)
-            end              
-        end        
+            end
+        end
     end
 
 
@@ -279,15 +276,15 @@ local function watch(self, key, attr)
     attr = attr and attr or {}
 
     local range_end
-    if attr.range_end then      
-        range_end = self.encode_base64(range_end)
+    if attr.range_end then
+        range_end = self.encode_base64(attr.range_end)
     end
 
     local prev_kv
     if attr.prev_kv then
         prev_kv = attr.prev_kv and 'true' or 'false'
     end
-    
+
     local start_revision
     if attr.start_revision then
         start_revision = attr.start_revision and attr.start_revision or 0

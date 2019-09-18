@@ -43,7 +43,6 @@ run_tests();
 
 __DATA__
 
-
 === TEST 1: set(key, val, ttl)
 --- http_config eval: $::HttpConfig
 --- config
@@ -65,6 +64,7 @@ GET /t
 [error]
 --- response_body
 checked val as expect: abc
+
 
 
 === TEST 2: watch(key)
