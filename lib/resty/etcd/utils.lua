@@ -72,12 +72,18 @@ _M.normalize = normalize
 
 
 local ngx_log = ngx.log
-local ngx_ERR = ngx.INFO
+local ngx_ERR = ngx.ERR
+local ngx_INFO = ngx.INFO
 local function log_error(...)
     return ngx_log(ngx_ERR, ...)
 end
-
 _M.log_error = log_error
+
+
+local function log_info( ... )
+    return ngx_log(ngx_INFO, ...)
+end
+_M.log_info = log_info
 
 
 local function request_uri(self, method, uri, opts, timeout)
@@ -99,7 +105,7 @@ local function request_uri(self, method, uri, opts, timeout)
         http_cli:set_timeout(timeout * 1000)
     end
 
-    log_error('uri:', uri, ' body:', body)
+    log_info('uri:', uri, ' body:', body)
 
     local res
     res, err = http_cli:request_uri(uri, {
@@ -112,7 +118,7 @@ local function request_uri(self, method, uri, opts, timeout)
         return nil, err
     end
 
-    log_error('res body:', res.body, 'status:', res.status)
+    log_info('res body:', res.body, 'status:', res.status)
 
     if res.status >= 500 then
         return nil, "invalid response code: " .. res.status
@@ -129,12 +135,13 @@ end
 _M.request_uri = request_uri
 
 
-local function request(self, method, host, port, path, opts)
+local function request_chunk(self, method, host, port, path, opts, timeout)
     local body
     if opts and opts.body and tab_nkeys(opts.body) > 0 then
         body = self.encode_json(opts.body) --encode_args(opts.body)
     end
 
+    local query
     if opts and opts.query and tab_nkeys(opts.query) > 0 then
         query = encode_args(opts.query)
     end
@@ -144,9 +151,18 @@ local function request(self, method, host, port, path, opts)
         return nil, err
     end
 
+    local ok, _
+    if timeout then
+        _, err = http_cli:set_timeout(timeout * 1000)
+        if err then
+            return nil, err
+        end
+    end
 
-    http_cli:connect(host, port)
-
+    ok, err = http_cli:connect(host, port)
+    if not ok then
+        return nil, err
+    end
 
     local res
     res, err = http_cli:request({
@@ -155,37 +171,18 @@ local function request(self, method, host, port, path, opts)
         body   = body,
         query  = query,
     })
+    log_info("http request method: ", method, " path: ", path,
+             " body: ", body, " query: ", query)
 
-    local chunks = {}
-    local c = 1
-    repeat
-        local chunk, err = res.body_reader()
-        log_error('err:', err, ' chunk:', chunk)
-        if chunk then
-            chunks[c] = chunk
-            c = c + 1
-        end
-    until not chunk
-    
+    if not res then
+        return nil, err
+    end
 
-    -- if err then
-    --     return nil, err
-    -- end
-
-    -- if res.status >= 500 then
-    --     return nil, "invalid response code: " .. res.status
-    -- end
-
-    -- if not typeof.string(res.body) then
-    --     return res
-    -- end
-
-    -- res.body = self.decode_json(res.body)
-    return nil, nil
+    return function()
+        return res.body_reader()
+    end
 end
-
-_M.request = request
-
+_M.request_chunk = request_chunk
 
 
 return _M

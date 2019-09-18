@@ -27,7 +27,7 @@ function _M.new(opts)
     local timeout    = opts.timeout or 5000    -- 5 sec
     local http_host  = opts.host or "http://127.0.0.1:2379"
     local ttl        = opts.ttl or -1
-    local api_prefix = opts.api_prefix or "/v3"
+    local api_prefix = opts.api_prefix or "/v3alpha"
     local key_prefix = opts.key_prefix or "/apisix"
 
     if not typeof.uint(timeout) then
@@ -121,7 +121,7 @@ local function set(self, key, val, attr)
 
     -- get
     if res.status < 300  then
-        utils.log_error("v3 set body: ", self.encode_json(res.body))
+        utils.log_info("v3 set body: ", self.encode_json(res.body))
     end
 
     return res
@@ -138,7 +138,7 @@ local function get(self, key, attr)
 
     local range_end
     if attr.range_end then
-        range_end = self.encode_base64(range_end)
+        range_end = self.encode_base64(attr.range_end)
     end
 
     attr = attr and attr or {}
@@ -232,16 +232,16 @@ local function get(self, key, attr)
         end
     end
 
-
     return res, err
 end
+
 
 local function delete(self, key, attr)
     attr = attr and attr or {}
 
     local range_end
     if attr.range_end then
-        range_end = self.encode_base64(range_end)
+        range_end = self.encode_base64(attr.range_endrange_end)
     end
 
     local prev_kv
@@ -264,6 +264,7 @@ local function delete(self, key, attr)
                     opts, self.timeout)
 end
 
+
 local function watch(self, key, attr)
     -- verify key
     key = utils.normalize(key)
@@ -272,8 +273,6 @@ local function watch(self, key, attr)
     end
 
     key = self.encode_base64(key)
-
-    attr = attr and attr or {}
 
     local range_end
     if attr.range_end then
@@ -325,17 +324,11 @@ local function watch(self, key, attr)
         }
     }
 
-    local res, err
-    -- res, err = utils.request_uri(self, 'POST',
-    --                     self.endpoints.full_prefix .. "/kv/watch",
-    --                     opts, self.timeout)
-
-
-    res, err = utils.request(self, 'POST', '127.0.0.1', '2379', '/v3/kv/watch', opts)
-
+    local res, err = utils.request_chunk(self, 'POST', '127.0.0.1', '2379',
+                            '/v3alpha/watch', opts,
+                            attr.timeout or self.timeout)
     return res, err
 end
-
 
 
 do

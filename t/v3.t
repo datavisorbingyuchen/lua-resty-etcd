@@ -2,7 +2,7 @@ use Test::Nginx::Socket::Lua 'no_plan';
 
 log_level('info');
 no_long_string();
-repeat_each(2);
+repeat_each(1);
 
 our $HttpConfig = <<'_EOC_';
     lua_socket_log_errors off;
@@ -72,19 +72,30 @@ checked val as expect: abc
 --- config
     location /t {
         content_by_lua_block {
-            local etcd, err = require "resty.etcdv3" .new()
+            local etcd, err = require("resty.etcdv3").new()
             check_res(etcd, err)
 
             local res, err = etcd:set("/test", "abc")
             check_res(res, err)
 
-            ngx.timer.at(1, function ()
+            ngx.timer.at(0.1, function ()
                 etcd:set("/test", "bcd")
             end)
 
             local cur_time = ngx.now()
-            local res, err = etcd:watch("/test", 1.5)
+            local body_chunk_fun, err = etcd:watch("/test", 0.5)
+            if not body_chunk_fun then
+                ngx.say("failed to watch: ", err)
+            end
 
+            ngx.say("type: ", type(body_chunk_fun))
+            while true do
+                local chunk, err = body_chunk_fun()
+                ngx.say("chunk: ", chunk, " err: ", err)
+                if not chunk then
+                    break
+                end
+            end
         }
     }
 --- request
