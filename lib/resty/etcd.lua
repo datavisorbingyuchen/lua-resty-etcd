@@ -117,28 +117,37 @@ function _M.new(opts)
                 full_prefix = http_host .. normalize(prefix),
                 http_host = http_host,
                 prefix = prefix,
-                version     = http_host .. '/version',
-                stats_leader = http_host .. '/v2/stats/leader',
-                stats_self   = http_host .. '/v2/stats/self',
-                stats_store  = http_host .. '/v2/stats/store',
-                keys        = http_host .. '/v2/keys',
+                version = '/version',
+                stats_leader = '/v2/stats/leader',
+                stats_self = '/v2/stats/self',
+                stats_store = '/v2/stats/store',
+                keys = '/v2/keys',
             }
         },
         mt)
 end
 
-    local content_type = {
-        ["Content-Type"] = "application/x-www-form-urlencoded",
-    }
+local content_type = {
+    ["Content-Type"] = "application/x-www-form-urlencoded",
+}
 
-local function _request(self, method, uri, opts, timeout)
-    local body
-    if opts and opts.body and tab_nkeys(opts.body) > 0 then
-        body = encode_args(opts.body)
+
+local function _request(self, method, key, body, query)
+    key = normalize(key)
+    if key == '/' then
+        return nil, "key should not be a slash"
     end
 
-    if opts and opts.query and tab_nkeys(opts.query) > 0 then
-        uri = uri .. '?' .. encode_args(opts.query)
+    local opts = {}
+
+    local req_body = nil
+    if body and tab_nkeys(body) > 0 then
+        req_body = encode_args(body)
+    end
+
+    local uri = self.endpoints.http_host .. key
+    if query and tab_nkeys(query) > 0 then
+        uri = uri .. '?' .. encode_args(query)
     end
 
     local http_cli, err = http.new()
@@ -146,14 +155,11 @@ local function _request(self, method, uri, opts, timeout)
         return nil, err
     end
 
-    if timeout then
-        http_cli:set_timeout(timeout * 1000)
-    end
+    http_cli:set_timeout(self.timeout)
 
-    local res
-    res, err = http_cli:request_uri(uri, {
+    local res, err = http_cli:request_uri(uri, {
         method = method,
-        body = body,
+        body = req_body,
         headers = content_type,
     })
 
@@ -165,327 +171,56 @@ local function _request(self, method, uri, opts, timeout)
         return nil, "invalid response code: " .. res.status
     end
 
-    if not typeof.string(res.body) then
-        return res
-    end
-
-    res.body = self.decode_json(res.body)
-    return res
-end
-
-
-local function set(self, key, val, attr)
-    local err
-    val, err = self.encode_json(val)
-    if not val then
-        return nil, err
-    end
-
-    local prev_exist
-    if attr.prev_exist ~= nil then
-        prev_exist = attr.prev_exist and 'true' or 'false'
-    end
-
-    local dir
-    if attr.dir then
-        dir = attr.dir and 'true' or 'false'
-    end
-
-    local opts = {
-        body = {
-            ttl = attr.ttl,
-            value = val,
-            dir = dir,
-        },
-        query = {
-            prevExist = prev_exist,
-            prevIndex = attr.prev_index,
-        }
-    }
-
-    -- todo: check arguments
-
-    -- verify key
-    key = normalize(key)
-    if key == '/' then
-        return nil, "key should not be a slash"
-    end
-
-    local res
-    res, err = _request(self, attr.in_order and 'POST' or 'PUT',
-                        self.endpoints.full_prefix .. key,
-                        opts, self.timeout)
+    local res_body, err = self.decode_json(res.body)
     if err then
-        return nil, err
+        return nil, "invalid response body: " .. res.body
     end
-
-    -- get
-    if res.status < 300 and res.body.node and not res.body.node.dir then
-        res.body.node.value, err = self.decode_json(res.body.node.value)
-        if err then
-            log_error("failed to json decode value of node: ", err)
-            return res, err
-        end
-    end
-
-    return res
-end
-
-
-local function decode_dir_value(self, body_node)
-    if not body_node.dir then
-        return false
-    end
-
-    if type(body_node.nodes) ~= "table" then
-        return false
-    end
-
-    local err
-    for _, node in ipairs(body_node.nodes) do
-        local val = node.value
-        if type(val) == "string" then
-            node.value, err = self.decode_json(val)
-            if err then
-                log_error("failed to decode json: ", err)
-            end
-        end
-
-        decode_dir_value(self, node)
-    end
-
-    return true
-end
-
-
-local function get(self, key, attr)
-    local opts
-    if attr then
-        local attr_wait
-        if attr.wait ~= nil then
-            attr_wait = attr.wait and 'true' or 'false'
-        end
-
-        local attr_recursive
-        if attr.recursive then
-            attr_recursive = attr.recursive and 'true' or 'false'
-        end
-
-        opts = {
-            query = {
-                wait = attr_wait,
-                waitIndex = attr.wait_index,
-                recursive = attr_recursive,
-                consistent = attr.consistent,   -- todo
-            }
-        }
-    end
-
-    local res, err = _request(self, "GET",
-                              self.endpoints.full_prefix .. normalize(key),
-                              opts, attr and attr.timeout or self.timeout)
-    if err then
-        return res, err
-    end
-
-    -- readdir
-    if attr and attr.dir then
-        if res.status == 200 and res.body.node and
-           not res.body.node.dir then
-            res.body.node.dir = false
-        end
-    end
-
-    if res.status == 200 and res.body.node then
-        local ok = decode_dir_value(self, res.body.node)
-        if not ok then
-            local val = res.body.node.value
-            if type(val) == "string" then
-                res.body.node.value, err = self.decode_json(val)
-                if err then
-                    log_error("failed to json decode: ", err)
-                end
-            end
-        end
-    end
-
-    return res
-end
-
-
-local function delete(self, key, attr)
-    local val, err = attr.prev_value
-    if val ~= nil and type(val) ~= "number" then
-        val, err = self.encode_json(val)
-        if not val then
-            return nil, err
-        end
-    end
-
-    local attr_dir
-    if attr.dir then
-        attr_dir = attr.dir and 'true' or 'false'
-    end
-
-    local attr_recursive
-    if attr.recursive then
-        attr_recursive = attr.recursive and 'true' or 'false'
-    end
-
-    local opts = {
-        query = {
-            dir = attr_dir,
-            prevIndex = attr.prev_index,
-            recursive = attr_recursive,
-            prevValue = val,
-        },
-    }
-
-    -- todo: check arguments
-    return _request(self, "DELETE",
-                    self.endpoints.full_prefix .. normalize(key),
-                    opts, self.timeout)
-end
-
-do
-
-function _M.get(self, key)
-    if not typeof.string(key) then
-        return nil, 'key must be string'
-    end
-
-    return get(self, key)
-end
-
-    local attr = {}
-function _M.wait(self, key, modified_index, timeout)
-    clear_tab(attr)
-    attr.wait = true
-    attr.wait_index = modified_index
-    attr.timeout = timeout
-
-    return get(self, key, attr)
-end
-
-function _M.readdir(self, key, recursive)
-    clear_tab(attr)
-    attr.dir = true
-    attr.recursive = recursive
-
-    return get(self, key, attr)
-end
-
--- wait with recursive
-function _M.waitdir(self, key, modified_index, timeout)
-    clear_tab(attr)
-    attr.wait = true
-    attr.dir = true
-    attr.recursive = true
-    attr.wait_index = modified_index
-    attr.timeout = timeout
-
-    return get(self, key, attr)
+    return res_body, nil
 end
 
 -- /version
 function _M.version(self)
-    return _request(self, 'GET', self.endpoints.version, nil, self.timeout)
+    return _request(self, 'GET', self.endpoints.version)
 end
 
 -- /stats
 function _M.stats_leader(self)
-    return _request(self, 'GET', self.endpoints.stats_leader, nil, self.timeout)
+    return _request(self, 'GET', self.endpoints.stats_leader)
 end
 
 function _M.stats_self(self)
-    return _request(self, 'GET', self.endpoints.stats_self, nil, self.timeout)
+    return _request(self, 'GET', self.endpoints.stats_self)
 end
 
 function _M.stats_store(self)
-    return _request(self, 'GET', self.endpoints.stats_store, nil, self.timeout)
+    return _request(self, 'GET', self.endpoints.stats_store)
 end
 
-end -- do
+function _M.get(self, key, recursive)
+    local query = {}
+    if recursive ~= nil then
+        query["recursive"] = tostring(recursive)
+    end
+    return _request(self, 'GET', self.endpoints.prefix .. key, nil, query)
+end
 
+function _M.wait(self, key, waitIndex, recursive)
+    local query = {}
+    if recursive ~= nil then
+        query["recursive"] = tostring(recursive)
+    end
+    query["waitIndex"] = waitIndex
+    query["wait"] = "true"
 
-do
-    local attr = {}
+    return _request(self, 'GET', self.endpoints.prefix .. key, nil, query)
+end
+
 function _M.set(self, key, val, ttl)
-    clear_tab(attr)
-    attr.ttl = ttl
-
-    return set(self, key, val, attr)
+    return _request(self, 'PUT', self.endpoints.prefix .. key, {value = val, ttl = ttl})
 end
 
--- set key-val and ttl if key does not exists (atomic create)
-function _M.setnx(self, key, val, ttl)
-    clear_tab(attr)
-    attr.ttl = ttl
-    attr.prev_exist = false
-
-    return set(self, key, val, attr)
+function _M.refresh(self, key, ttl)
+    return _request(self, 'PUT', self.endpoints.prefix .. key, {refresh = "true", ttl = ttl})
 end
-
--- set key-val and ttl if key is exists (update)
-function _M.setx(self, key, val, ttl, modified_index)
-    clear_tab(attr)
-    attr.ttl = ttl
-    attr.prev_exist = true
-    attr.prev_index = modified_index
-
-    return set(self, key, val, attr)
-end
-
--- dir
-function _M.mkdir(self, key, ttl)
-    clear_tab(attr)
-    attr.ttl = ttl
-    attr.dir = true
-
-    return set(self, key, nil, attr)
-end
-
--- mkdir if not exists
-function _M.mkdirnx(self, key, ttl)
-    clear_tab(attr)
-    attr.ttl = ttl
-    attr.dir = true
-    attr.prev_exist = false
-
-    return set(self, key, nil, attr)
-end
-
--- in-order keys
-function _M.push(self, key, val, ttl)
-    clear_tab(attr)
-    attr.ttl = ttl
-    attr.in_order = true
-
-    return set(self, key, val, attr)
-end
-
-end -- do
-
-
-do
-    local attr = {}
-function _M.delete(self, key, prev_val, modified_index)
-    clear_tab(attr)
-    attr.prev_value = prev_val
-    attr.prev_index = modified_index
-
-    return delete(self, key, attr)
-end
-
-function _M.rmdir(self, key, recursive)
-    clear_tab(attr)
-    attr.dir = true
-    attr.recursive = recursive
-
-    return delete(self, key, attr)
-end
-
-end -- do
-
 
 return _M
